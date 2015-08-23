@@ -1,0 +1,101 @@
+---
+title: "Learning How to Weightlift"
+author: "Adam Abdulhafid"
+date: "Sunday, August 23, 2015"
+output: html_document
+---
+
+# What am I learning?
+
+I want to be able to determine whether or not I am performing curls properly. This will allow me to maximize the effort for this workout, while minimizing injury. The data I use is the [HAR dataset on weightlifting](http://groupware.les.inf.puc-rio.br/har).
+
+# What do I use to learn?
+
+First, the data is downloaded to the working directory and loaded into R. I load library dplyr for piping and later manipulation of the data.
+
+```{r, cache=TRUE}
+library(dplyr)
+"http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv" %>%
+        download.file(destfile = "pml-training.csv")
+training <- read.csv("pml-training.csv")
+```
+
+Many of the covariates in the dataset are descriptive statistics of other variables.
+
+```{r}
+str(training)
+```
+
+I select out classe, which I will predict on, and the measureement variables.
+
+``` {r}
+training <- select(training
+                   ,starts_with("magnet_")
+                   ,starts_with("gyros_")
+                   ,starts_with("accel_")
+                   ,starts_with("roll_")
+                   ,starts_with("pitch_")
+                   ,starts_with("yaw_")
+                   ,classe)
+```
+
+Next, I partition the training data to estimate the out of sample error. I load the caret library for all of the subsequent model building steps.
+
+```{r}
+library(caret)
+inTrain <- createDataPartition(y = training$classe
+                               ,p = 0.6, list = FALSE)
+trainCV <- training[inTrain,]
+testCV <- training[-inTrain,]
+```
+
+I want to see what features should be used for training the model. First, I want to see the interaction between the different measurement points. That is, how do the belt, arm, forearm, and dumbbell sensors interact for a given variable.
+
+``` {r}
+featurePlot(x = select(trainCV, starts_with("pitch_")), y = trainCV$classe, plot = "pairs")
+```
+
+I see that the belt sensor splits the data into two groups. However, the appears evenly distributed between the groups and the belt sensor is probably adding noise to the data. This makes sense considering the exercise is done mostly through the arms. I will use only the data from the remaining sensors.
+
+``` {r}
+trainCV <- select(trainCV, -contains("belt"))
+testCV <- select(testCV, -contains("belt"))
+```
+
+# How do I learn?
+This is a classification problem using continuously measured data. The best model to use for this is linear discriinant analysis. The assumption being that the relatinship between the predictors are linear with the same covariance. The model will be built with the remaining data set, and with principal components of the remaining data set.  
+
+First, I pre process the data and generate the principal components for the training and testing sets.
+
+``` {r}
+preProc <- preProcess(trainCV[,-which(names(trainCV) == "classe")]
+                      ,method = "pca", pcaComp = 15)
+trainPC <- predict(preProc
+                   ,trainCV[,-which(names(trainCV) == "classe")])
+testPC <- predict(preProc
+                  ,testCV[,-which(names(trainCV) == "classe")])
+```
+
+Then, I generate the models with and without the principal component pre processing.
+
+``` {r}
+wtlftldaPC <- train(trainCV$classe ~ ., data = trainPC
+                  ,method = "lda"
+                  ,trControl = trainControl(method = "CV"))
+
+wtlftlda <- train(classe ~ ., data = trainCV
+                    ,method = "lda"
+                    ,trControl = trainControl(method = "CV"))
+```
+
+# What have I learned?
+I have the lda models with and without the principal component analysis. I need to determine which one to use, and how good that model is. I will predict on the data that I set aside at the beginning of this analysis. This will be used to generate the confusion matrix of the accurracy of the models.
+
+``` {r}
+resultldaPC <- predict(wtlftldaPC, newdata = testPC)
+resultlda <- predict(wtlftlda, newdata = testCV[,-which(names(testCV) == "classe")])
+confusionMatrix(resultldaPC, testCV$classe)
+confusionMatrix(resultlda, testCV$classe)
+```
+
+That is strange. The model on the principal component data is less than 50% accurate. It must have ignored too much of the variation left in the other model. I have a model that is roughly 60% accurate, which means that the out of sample error rate should be around 40%. Let's see if that is correct.
